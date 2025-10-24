@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Paper Mario Bros MMO - p5.js + PeerJS</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        body { margin: 0; padding: 20px; font-family: Arial, sans-serif; background: #f0f0f0; }
+        #gameContainer { position: relative; }
+        #ui { position: absolute; top: 10px; left: 10px; z-index: 10; background: rgba(255,255,255,0.8); padding: 10px; border-radius: 5px; }
+        input, button { margin: 5px; padding: 5px; }
+        #status { color: #333; }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <div id="ui">
+            <label>Your Peer ID: <input id="myId" readonly style="width: 200px;"></label><br>
+            <label>Connect to ID: <input id="targetId" type="text" placeholder="Enter peer ID"></label>
+            <button onclick="connectPeer()">Connect</button><br>
+            <button onclick="generateHost()">Host Game</button><br>
+            <div id="status">Status: Disconnected</div>
+            <div id="players">Players: You</div>
+        </div>
+        <script id="sketch-holder" type="text/p5">
+        </script>
+    </div>
+
+    <script>
+        let sketch = function(p) {
+            let players = {}; // {peerId: {x, y, vx, vy, color, name}}
+            let myPlayer = { x: 100, y: 300, vx: 0, vy: 0, color: [255, 200, 0], name: 'Mario' };
+            let keys = {};
+            let gravity = 0.5;
+            let friction = 0.8;
+            let groundY = 350;
+            let peer;
+            let connections = {};
+            let myId;
+            let gameWidth = 800;
+            let gameHeight = 400;
+
+            p.setup = function() {
+                let canvas = p.createCanvas(gameWidth, gameHeight);
+                canvas.parent('sketch-holder');
+                p.frameRate(60);
+
+                // Simple "paper" style: flat colors, outlines
+                p.stroke(0);
+                p.strokeWeight(2);
+
+                // Init PeerJS
+                peer = new Peer({
+                    config: { 'iceServers': [{ 'urls': 'stun:stun.l.google.com:19302' }] }
+                });
+
+                peer.on('open', function(id) {
+                    myId = id;
+                    document.getElementById('myId').value = id;
+                    updateStatus('Connected. Share your ID to host.');
+                    players[myId] = myPlayer;
+                });
+
+                peer.on('connection', function(conn) {
+                    connections[conn.peer] = conn;
+                    conn.on('data', function(data) {
+                        if (data.type === 'position') {
+                            if (!players[data.peerId]) players[data.peerId] = { x: 0, y: 0, vx: 0, vy: 0, color: [100, 100, 255], name: 'Player' + conn.peer.slice(-4) };
+                            players[data.peerId].x = data.x;
+                            players[data.peerId].y = data.y;
+                            players[data.peerId].vx = data.vx;
+                            players[data.peerId].vy = data.vy;
+                        }
+                    });
+                    conn.on('open', function() {
+                        updatePlayersList();
+                    });
+                    conn.on('close', function() {
+                        delete players[conn.peer];
+                        delete connections[conn.peer];
+                        updatePlayersList();
+                    });
+                });
+
+                p.keyPressed = function() { keys[p.keyCode] = true; };
+                p.keyReleased = function() { keys[p.keyCode] = false; };
+            };
+
+            p.draw = function() {
+                // Background - simple paper sky and ground
+                p.background(135, 206, 235); // Sky blue
+                p.fill(34, 139, 34);
+                p.rect(0, groundY, gameWidth, gameHeight - groundY);
+
+                // Update my player
+                updatePlayer(myPlayer);
+
+                // Send position to all connections
+                if (myId) {
+                    let posData = { type: 'position', peerId: myId, x: myPlayer.x, y: myPlayer.y, vx: myPlayer.vx, vy: myPlayer.vy };
+                    Object.values(connections).forEach(conn => conn.send(posData));
+                }
+
+                // Draw all players
+                Object.values(players).forEach(drawPlayer);
+            };
+
+            function updatePlayer(player) {
+                // Movement
+                if (keys[65] || keys[37]) { // A or left
+                    player.vx -= 0.5;
+                }
+                if (keys[68] || keys[39]) { // D or right
+                    player.vx += 0.5;
+                }
+                if ((keys[87] || keys[38] || keys[32]) && player.y >= groundY - 20) { // W/up/space jump
+                    player.vy = -10;
+                }
+
+                // Physics
+                player.vx *= friction;
+                player.vy += gravity;
+                player.x += player.vx;
+                player.y += player.vy;
+
+                // Boundaries
+                if (player.x < 0) player.x = 0;
+                if (player.x > gameWidth - 20) player.x = gameWidth - 20;
+                if (player.y > groundY - 20) {
+                    player.y = groundY - 20;
+                    player.vy = 0;
+                }
+
+                // Wrap around for fun
+                if (player.x < -20) player.x = gameWidth;
+                if (player.x > gameWidth + 20) player.x = 0;
+            }
+
+            function drawPlayer(player) {
+                p.push();
+                p.translate(player.x, player.y);
+
+                // Paper Mario simple: body, head, hat, arms/legs
+                p.fill(player.color);
+                p.noStroke();
+                p.rect(-10, 0, 20, 30); // Body
+
+                p.fill(255); // Head white paper
+                p.ellipse(0, -10, 20, 20);
+
+                p.fill(200, 0, 0); // Red hat
+                p.triangle(-8, -20, 8, -20, 0, -30);
+
+                p.fill(player.color);
+                p.rect(-12, 20, 4, 10); // Left leg
+                p.rect(8, 20, 4, 10); // Right leg
+                p.rect(-15, 5, 5, 15); // Left arm
+                p.rect(10, 5, 5, 15); // Right arm
+
+                p.stroke(0);
+                p.strokeWeight(1);
+                p.textAlign(p.CENTER);
+                p.textSize(8);
+                p.fill(0);
+                p.text(player.name, 0, -35);
+
+                p.pop();
+            }
+        };
+
+        new p5(sketch);
+
+        // Global functions for UI
+        function generateHost() {
+            if (myId) {
+                updateStatus('You are hosting! Share your ID: ' + myId);
+                document.getElementById('players').innerHTML += ' (Host)';
+            }
+        }
+
+        function connectPeer() {
+            let targetId = document.getElementById('targetId').value.trim();
+            if (!targetId || !myId || connections[targetId]) return;
+
+            let conn = peer.connect(targetId);
+            connections[targetId] = conn;
+
+            conn.on('open', function() {
+                updateStatus('Connected to ' + targetId);
+                updatePlayersList();
+            });
+
+            conn.on('error', function(err) {
+                updateStatus('Connection failed: ' + err.type);
+            });
+
+            conn.on('data', function(data) {
+                if (data.type === 'position') {
+                    if (!players[data.peerId]) players[data.peerId] = { x: 0, y: 0, vx: 0, vy: 0, color: [100, 100, 255], name: 'Player' + data.peerId.slice(-4) };
+                    players[data.peerId].x = data.x;
+                    players[data.peerId].y = data.y;
+                    players[data.peerId].vx = data.vx;
+                    players[data.peerId].vy = data.vy;
+                }
+            });
+
+            conn.on('close', function() {
+                delete players[targetId];
+                delete connections[targetId];
+                updatePlayersList();
+            });
+        }
+
+        function updateStatus(msg) {
+            document.getElementById('status').innerHTML = 'Status: ' + msg;
+        }
+
+        function updatePlayersList() {
+            let list = Object.keys(players).map(id => id.slice(-4));
+            document.getElementById('players').innerHTML = 'Players: ' + list.join(', ');
+        }
+    </script>
+</body>
+</html>
